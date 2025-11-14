@@ -6,7 +6,7 @@ import warnings
 import numpy as np
 
 
-warnings.simplefilter('ignore', np.RankWarning)
+warnings.simplefilter('ignore', np.exceptions.RankWarning)
 warnings.simplefilter('ignore', UserWarning)
 
 model = Endemo()
