@@ -101,6 +101,9 @@ def initialize_hierarchy_input_from_settings_data(input_manager):
             region.add_sector(sector)
         data.add_region(region)
 
+    # Load subregion mapping and factors
+    read_subregion_data(input_manager, data)
+
     fe_type_list = get_final_energy_types(input_manager)
     user_set_data_filtered = user_set_data[user_set_data['FE_Type'].isin(fe_type_list)]
     fe_dfs = {
@@ -362,3 +365,20 @@ def parse_technologies(row):
             for tech in row["Technology"].split(",")
         ]
     return ["default"]
+
+def read_subregion_data(input_manager, data_manager):
+    """Read subregion mapping and factors from Excel sheets."""
+    try:
+        # Read subregion mapping from Model_Set_and_Control.xlsx
+        ctrl_file = input_manager.input_path / 'Model_Set_and_Control.xlsx'
+        mapping_df = pd.read_excel(ctrl_file, sheet_name='Subregions')
+        data_manager.read_subregion_mapping(mapping_df)
+        
+        # Read subregion factors from Data_yearly.xlsx
+        data_file = input_manager.input_path / 'Data_yearly.xlsx'
+        subregion_df = pd.read_excel(data_file, sheet_name='Hist_Subregion')
+        data_manager.read_subregion_factors(subregion_df)
+    except FileNotFoundError as e:
+        print(f"Warning: Could not load subregion data: {e}")
+    except Exception as e:
+        print(f"Warning: Error reading subregion data: {e}")

@@ -32,7 +32,12 @@ class GeneralSettings:
         self.active_regions = pd.read_excel(ctrl_ex, sheet_name="Regions").query("Active == True")["Region"].tolist()
         self.region_code_map = pd.read_excel(ctrl_ex, sheet_name="Regions").query("Active == True").set_index("Region")[
             "Code"].to_dict()
+        self.region_2l_code_map = pd.read_excel(ctrl_ex, sheet_name="Regions").query("Active == True").set_index("Region")[
+            "2-letter code"].to_dict()
+        self.subregion_code_map = pd.read_excel(ctrl_ex, sheet_name="Subregions")["Subregion"].tolist()
         self.active_subsectors = {}
+        print(self.region_2l_code_map)
+        print(self.subregion_code_map)
 
         # Extract forecast-related parameters
         self.forecast_year_range = self.get_forecast_year_range(self.general_set)
