@@ -367,18 +367,13 @@ def parse_technologies(row):
     return ["default"]
 
 def read_subregion_data(input_manager, data_manager):
-    """Read subregion mapping and factors from Excel sheets."""
+    """Read subregion factors from Data_yearly.xlsx.
+    Subregion mapping is already loaded in control_parameters."""
     try:
-        # Read subregion mapping from Model_Set_and_Control.xlsx
-        ctrl_file = input_manager.input_path / 'Model_Set_and_Control.xlsx'
-        mapping_df = pd.read_excel(ctrl_file, sheet_name='Subregions')
-        data_manager.read_subregion_mapping(mapping_df)
-        
-        # Read subregion factors from Data_yearly.xlsx
         data_file = input_manager.input_path / 'Data_yearly.xlsx'
         subregion_df = pd.read_excel(data_file, sheet_name='Hist_Subregion')
         data_manager.read_subregion_factors(subregion_df)
     except FileNotFoundError as e:
-        print(f"Warning: Could not load subregion data: {e}")
+        print(f"Warning: Could not load subregion factors: {e}")
     except Exception as e:
-        print(f"Warning: Error reading subregion data: {e}")
+        print(f"Warning: Error reading subregion factors: {e}")

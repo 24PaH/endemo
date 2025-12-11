@@ -19,10 +19,13 @@ class ExcelWriter:
         self.timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         self.output_path = self._create_output_directory(data.input_manager)
         os.makedirs(self.output_path, exist_ok=True)
-        # Data collection structures
+        # Data collection structures - separate regional and subregional data
         self.sector_forecasts = defaultdict(list)
+        self.sector_forecasts_subregional = defaultdict(list)
         self.ue_sector_data = defaultdict(list)
+        self.ue_sector_data_subregional = defaultdict(list)
         self.fe_sector_data = defaultdict(list)
+        self.fe_sector_data_subregional = defaultdict(list)
         self.timeseries_data = defaultdict(list)
         self.efficiency = defaultdict(list)
         self.process_all(data)
@@ -54,60 +57,96 @@ class ExcelWriter:
         self._write_timeseries_data()
 
     def collect_ue_data(self, regions):
-        """Collect useful energy data from model_useful_energy structure"""
+        """Collect useful energy data - both regional and subregional"""
         for region in regions:
             if region.energy_ue is not None and not region.energy_ue.empty:
                 self._process_region_ue(region)
+                # Also create subregional UE data
+                self._process_region_ue_subregional(region)
 
     def collect_fe_data(self, regions):
-        """Collect final energy data from model_useful_energy structure"""
+        """Collect final energy data - both regional and subregional."""
         for region in regions:
-            # Check if subregional FE data exists - if yes, use it instead of regional
-            has_subregions = (hasattr(region, 'energy_fe_subregions') and 
-                            region.energy_fe_subregions is not None and 
-                            not region.energy_fe_subregions.empty)
-            
-            if has_subregions:
-                # Use subregional FE data (preferred as it provides better geographic detail)
-                df_sub = region.energy_fe_subregions.copy()
-                # Ensure the subregion column is named 'Subregions' and placed after 'Region'
-                if 'Subregions' not in df_sub.columns:
-                    # try to find 'Subregions' alternative column names
-                    alt = next((c for c in df_sub.columns if c.lower() == 'subregions' or c.lower() == 'subregion'), None)
-                    if alt:
-                        df_sub = df_sub.rename(columns={alt: 'Subregions'})
-                    else:
-                        # create Subregions column from Region values (fallback)
-                        df_sub['Subregions'] = df_sub['Region']
-                # reorder to have Region then Subregions
-                cols = list(df_sub.columns)
-                if 'Region' in cols:
-                    cols.remove('Region')
-                    cols.insert(0, 'Region')
-                if 'Subregions' in cols:
-                    cols.remove('Subregions')
-                    cols.insert(1, 'Subregions')
-                df_sub = df_sub[cols]
-                for sector_name, sector_df in df_sub.groupby('Sector'):
-                    self.fe_sector_data[sector_name].append(sector_df)
-            elif region.energy_fe is not None and not region.energy_fe.empty:
-                # Use regional FE data if no subregional data available
+            # Always collect regional FE data
+            if region.energy_fe is not None and not region.energy_fe.empty:
                 self._process_region_fe(region)
+            
+            # Collect subregional FE data if available
+            if (hasattr(region, 'energy_fe_subregions') and 
+                region.energy_fe_subregions is not None and 
+                not region.energy_fe_subregions.empty):
+                self._process_region_fe_subregional(region)
+
+    def _process_region_fe_subregional(self, region):
+        """Process subregional FE data"""
+        df_sub = region.energy_fe_subregions.copy()
+        # Ensure the subregion column is named 'Subregions' and placed after 'Region'
+        if 'Subregions' not in df_sub.columns:
+            alt = next((c for c in df_sub.columns if c.lower() in ('subregions', 'subregion')), None)
+            if alt:
+                df_sub = df_sub.rename(columns={alt: 'Subregions'})
+            else:
+                df_sub['Subregions'] = df_sub['Region']
+        # Reorder columns
+        cols = list(df_sub.columns)
+        if 'Region' in cols:
+            cols.remove('Region')
+            cols.insert(0, 'Region')
+        if 'Subregions' in cols:
+            cols.remove('Subregions')
+            cols.insert(1, 'Subregions')
+        df_sub = df_sub[cols]
+        for sector_name, sector_df in df_sub.groupby('Sector'):
+            self.fe_sector_data_subregional[sector_name].append(sector_df)
 
     def _process_region_ue(self, region):
         """Process region-level UE data"""
         df = region.energy_ue
-        # Prepare sector-level data
         for sector_name, sector_df in df.groupby('Sector'):
             self.ue_sector_data[sector_name].append(sector_df)
 
+    def _process_region_ue_subregional(self, region):
+        """Process subregional UE data by expanding using subregion factors"""
+        df = region.energy_ue.copy()
+        subregion_rows = []
+        year_columns = [col for col in df.columns if isinstance(col, str) and col.isdigit()]
+        
+        for _, row in df.iterrows():
+            sector = row.get('Sector', 'default')
+            subsector = row.get('Subsector', 'default')
+            
+            factors = self.data.get_subregion_factors(region.region_name, sector, subsector)
+            if not factors:
+                sub_row = row.copy()
+                sub_row['Subregions'] = region.region_name
+                subregion_rows.append(sub_row)
+                continue
+            
+            for subregion, factor in factors.items():
+                sub_row = row.copy()
+                sub_row['Subregions'] = subregion
+                for year_col in year_columns:
+                    if year_col in sub_row.index and pd.notna(sub_row[year_col]):
+                        sub_row[year_col] = sub_row[year_col] * factor
+                subregion_rows.append(sub_row)
+        
+        if subregion_rows:
+            df_sub = pd.DataFrame(subregion_rows).reset_index(drop=True)
+            # Reorder columns
+            cols = list(df_sub.columns)
+            if 'Region' in cols:
+                cols.remove('Region')
+                cols.insert(0, 'Region')
+            if 'Subregions' in cols:
+                cols.remove('Subregions')
+                cols.insert(1, 'Subregions')
+            df_sub = df_sub[cols]
+            for sector_name, sector_df in df_sub.groupby('Sector'):
+                self.ue_sector_data_subregional[sector_name].append(sector_df)
+
     def _process_region_fe(self, region):
-        """Process region-level UE data"""
+        """Process region-level FE data (no subregional breakdown)"""
         df = region.energy_fe.copy()
-        # ensure Subregions column exists for consistency
-        if 'Subregions' not in df.columns:
-            df['Subregions'] = df['Region']
-        # Prepare sector-level data
         for sector_name, sector_df in df.groupby('Sector'):
             self.fe_sector_data[sector_name].append(sector_df)
 
@@ -141,44 +180,83 @@ class ExcelWriter:
                         var, tech.name
                     )
 
+    # Intensive variables that should NOT be expanded to subregions
+    # These are ratios, shares, or per-unit values that apply equally across subregions
+    INTENSIVE_VARIABLE_PREFIXES = (
+        'SPEC_EN',      # Specific energy per unit (GJ/ton, GJ/m², etc.)
+        'SPEC_CAPA',    # Specific capacity
+        'TECH_SHARE',   # Technology share (fraction)
+        'MODAL_SPLIT',  # Modal share
+        'MODAL_DRIVE',  # Drive share within modal
+        'INEFF',        # Inefficiency factor
+        'CALIB',        # Calibration factor
+        'TEMP_DIFF',    # Temperature difference factor
+        'OTHER_',       # Other factors (OTHER_CH, OTHER_NM)
+    )
+    
+    def _is_intensive_variable(self, variable_name):
+        """Check if a variable is intensive (ratio/share) vs extensive (quantity)."""
+        return variable_name.startswith(self.INTENSIVE_VARIABLE_PREFIXES)
+
     def _add_forecast_entry(self, region, sector, subsector, variable, technology):
-        """Format and store a forecast entry"""
-        # Use conditional assignment instead of insert
+        """Format and store a forecast entry - both regional and subregional.
+        Intensive variables (ratios, shares, specific energy) are not expanded to subregions."""
         df = variable.forecast.copy()
         df.columns = df.columns.astype(str)
         
-        # Disaggregate to subregions if available
-        df = self.data.expand_forecast_to_subregions(
+        # Reorder columns for regional data
+        column_order_regional = ["Region", 'Subsector', 'Variable', "Technology", "UE_Type", "FE_Type", 
+                                  "Temp_level", "Subtech", "Drive"] + \
+                                 [col for col in df.columns if col not in ["Region", 'Subsector', 'Variable', 
+                                  "Technology", "UE_Type", "FE_Type", "Temp_level", "Subtech", "Drive"]]
+        # Store regional forecast
+        df_regional = df[[c for c in column_order_regional if c in df.columns]]
+        self.sector_forecasts[sector.name].append(df_regional)
+        
+        # Skip subregional expansion for intensive variables
+        # These are region-level parameters that apply equally to all subregions
+        if self._is_intensive_variable(variable.name):
+            return
+        
+        # Disaggregate extensive variables to subregions
+        df_sub = self.data.expand_forecast_to_subregions(
             df, 
             region.region_name,
             sector.name,
-            subsector.name,
-            variable.name
+            subsector.name
         )
         
-        # Reorder columns if needed (safer than insert)
-        column_order = ["Region","Subregions",'Subsector', 'Variable',"Technology","UE_Type","FE_Type","Temp_level","Subtech","Drive"] + \
-                       [col for col in df.columns if col not in ["Region","Subregions",'Subsector', 'Variable',"Technology","UE_Type","FE_Type","Temp_level","Subtech","Drive"]]
-        # ensure Subregions exists
-        if 'Subregions' not in df.columns:
-            if 'Subregion' in df.columns:
-                df = df.rename(columns={'Subregion':'Subregions'})
-            else:
-                df['Subregions'] = df['Region']
-        self.sector_forecasts[sector.name].append(df[column_order])
+        # Reorder columns for subregional data
+        column_order_sub = ["Region", "Subregions", 'Subsector', 'Variable', "Technology", "UE_Type", 
+                            "FE_Type", "Temp_level", "Subtech", "Drive"] + \
+                           [col for col in df_sub.columns if col not in ["Region", "Subregions", 'Subsector', 
+                            'Variable', "Technology", "UE_Type", "FE_Type", "Temp_level", "Subtech", "Drive"]]
+        if 'Subregions' not in df_sub.columns:
+            df_sub['Subregions'] = df_sub['Region']
+        df_sub = df_sub[[c for c in column_order_sub if c in df_sub.columns]]
+        self.sector_forecasts_subregional[sector.name].append(df_sub)
 
     def _write_sector_forecasts(self):
-        """Handle sector forecast writing"""
+        """Handle sector forecast writing - both regional and subregional"""
         sector_dir = self.output_path / "sector_forecasts"
         sector_dir.mkdir(exist_ok=True)
+        
+        # Write regional forecasts
         for sector_name, dfs in self.sector_forecasts.items():
             if dfs:
                 combined = pd.concat(dfs, ignore_index=True)
                 file_path = sector_dir / f"predictions_{sector_name}.xlsx"
                 combined.to_excel(file_path, index=False)
+        
+        # Write subregional forecasts
+        for sector_name, dfs in self.sector_forecasts_subregional.items():
+            if dfs:
+                combined = pd.concat(dfs, ignore_index=True)
+                file_path = sector_dir / f"predictions_{sector_name}_subregional.xlsx"
+                combined.to_excel(file_path, index=False)
 
         for name, df in self.efficiency.items():
-            if not all(x is None for x in df):# if df is not None and df:
+            if not all(x is None for x in df):
                 combined = pd.concat(df, ignore_index=True)
                 file_path = sector_dir / f"predictions_{name}.xlsx"
                 combined.to_excel(file_path, index=False)
@@ -321,7 +399,8 @@ class ExcelWriter:
             )
 
     def _write_ue_sector_data(self):
-        """Handle sector-level UE data writing"""
+        """Handle sector-level UE data writing - both regional and subregional"""
+        # Write regional UE files
         for sector_name, dfs in self.ue_sector_data.items():
             if dfs:
                 combined = pd.concat(dfs, ignore_index=True)
@@ -337,31 +416,57 @@ class ExcelWriter:
                         writer, sheet_name="Aggregated_by_Subsector")
                     combined.groupby(['UE_Type', "Temp_level", 'Sector']).sum(numeric_only=True).to_excel(
                         writer, sheet_name="Aggregated_by_Sector")
+        
+        # Write subregional UE files (only first two sheets)
+        for sector_name, dfs in self.ue_sector_data_subregional.items():
+            if dfs:
+                combined = pd.concat(dfs, ignore_index=True)
+                file_path = self.output_path / f"UE_{sector_name}_subregional.xlsx"
+                with pd.ExcelWriter(file_path) as writer:
+                    combined.to_excel(writer, sheet_name="UE_all", index=False)
+                    combined.groupby(['UE_Type', "Temp_level", "Region", "Subregions"]).sum(numeric_only=True).to_excel(
+                        writer, sheet_name="Aggregated_by_Subregion")
 
     def _write_fe_sector_data(self):
-        """Handle sector-level UE data writing"""
+        """Handle sector-level FE data writing - both regional and subregional"""
+        # Write regional FE files
         for sector_name, dfs in self.fe_sector_data.items():
             if dfs:
                 combined = pd.concat(dfs, ignore_index=True)
-                column_order = ["Region", 'Subregions', 'Subsector',"Technology", "UE_Type", "FE_Type", "Temp_level", "Subtech",
+                column_order = ["Region", 'Subsector', "Technology", "UE_Type", "FE_Type", "Temp_level", "Subtech",
                                 "Drive"] + \
                                [col for col in combined.columns if
-                                col not in ["Region", 'Subregions', 'Subsector', "Technology", "UE_Type", "FE_Type",
-                                            "Temp_level",
-                                            "Subtech", "Drive"]]
-                combined =combined[column_order]
+                                col not in ["Region", 'Subsector', "Technology", "UE_Type", "FE_Type",
+                                            "Temp_level", "Subtech", "Drive"]]
+                combined = combined[[c for c in column_order if c in combined.columns]]
                 file_path = self.output_path / f"FE_{sector_name}.xlsx"
                 with pd.ExcelWriter(file_path) as writer:
-                    combined.to_excel(writer, sheet_name="FE_all")
+                    combined.to_excel(writer, sheet_name="FE_all", index=False)
                     combined.groupby(["FE_Type", 'UE_Type', "Temp_level", "Region"]).sum(numeric_only=True).to_excel(
                         writer, sheet_name="Aggregated_by_Sector_per_Region")
-                    combined.groupby(["FE_Type", 'UE_Type',"Temp_level", 'Subsector', 'Technology']).sum(
+                    combined.groupby(["FE_Type", 'UE_Type', "Temp_level", 'Subsector', 'Technology']).sum(
                         numeric_only=True).to_excel(
                         writer, sheet_name="Aggregated_by_Technology")
                     combined.groupby(["FE_Type", 'UE_Type', "Temp_level", 'Subsector']).sum(numeric_only=True).to_excel(
                         writer, sheet_name="Aggregated_by_Subsector")
                     combined.groupby(["FE_Type", 'UE_Type', "Temp_level", 'Sector']).sum(numeric_only=True).to_excel(
                         writer, sheet_name="Aggregated_by_Sector")
+        
+        # Write subregional FE files (only first two sheets)
+        for sector_name, dfs in self.fe_sector_data_subregional.items():
+            if dfs:
+                combined = pd.concat(dfs, ignore_index=True)
+                column_order = ["Region", 'Subregions', 'Subsector', "Technology", "UE_Type", "FE_Type", "Temp_level", 
+                                "Subtech", "Drive"] + \
+                               [col for col in combined.columns if
+                                col not in ["Region", 'Subregions', 'Subsector', "Technology", "UE_Type", "FE_Type",
+                                            "Temp_level", "Subtech", "Drive"]]
+                combined = combined[[c for c in column_order if c in combined.columns]]
+                file_path = self.output_path / f"FE_{sector_name}_subregional.xlsx"
+                with pd.ExcelWriter(file_path) as writer:
+                    combined.to_excel(writer, sheet_name="FE_all", index=False)
+                    combined.groupby(["FE_Type", 'UE_Type', "Temp_level", "Region", "Subregions"]).sum(
+                        numeric_only=True).to_excel(writer, sheet_name="Aggregated_by_Subregion")
 
     def _write_diagrams(self):
         """Generate and save Sankey diagrams"""

@@ -13,7 +13,7 @@ class InputManager:
     super_path = Path(os.path.abspath(''))
     input_path = super_path / 'input'
     output_path = super_path / 'output'
-    ctrl_file = input_path / 'Model_Set_and_Control.xlsx'
+    ctrl_file = input_path / 'Model_Set_and_Control_v2.xlsx'
     timeseries_file = input_path / 'timeseries.xlsx'
 
     def __init__(self):

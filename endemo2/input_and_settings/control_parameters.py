@@ -34,10 +34,9 @@ class GeneralSettings:
             "Code"].to_dict()
         self.region_2l_code_map = pd.read_excel(ctrl_ex, sheet_name="Regions").query("Active == True").set_index("Region")[
             "2-letter code"].to_dict()
-        self.subregion_code_map = pd.read_excel(ctrl_ex, sheet_name="Subregions")["Subregion"].tolist()
+        self.subregion_mapping = self._read_subregion_mapping(ctrl_ex)  # Maps region -> [subregion_codes]
         self.active_subsectors = {}
-        print(self.region_2l_code_map)
-        print(self.subregion_code_map)
+        self.subsector_subregion_division = {}  # Maps (sector, subsector) -> distribution variable name
 
         # Extract forecast-related parameters
         self.forecast_year_range = self.get_forecast_year_range(self.general_set)
@@ -71,6 +70,13 @@ class GeneralSettings:
                     # Read the sheet and store only rows where 'Active' is True
                     df = pd.read_excel(ctrl_ex, sheet_name=sheet_name)
                     df = df[df['Active'] == True] # this ensures that we are processing only active subsecors
+                    # Extract Subregional_division mapping before setting index
+                    if 'Subregional_division' in df.columns:
+                        for _, row in df.iterrows():
+                            subsector = row['Subsector']
+                            division_var = row.get('Subregional_division')
+                            if pd.notna(division_var):
+                                self.subsector_subregion_division[(sector_name, subsector)] = division_var
                     df = df.set_index('Subsector')
                     sectors_settings[sector_name] = df
                     self.active_subsectors[sector_name] = df.index.tolist()
@@ -79,3 +85,21 @@ class GeneralSettings:
             else:
                 print(f"Sheet {sheet_name} not found in control file. No data for {sector_name}.")
         return sectors_settings
+
+    def _read_subregion_mapping(self, ctrl_ex):
+        """Read subregion mapping from Subregions sheet. Returns dict: region -> [subregion_codes]"""
+        try:
+            df = pd.read_excel(ctrl_ex, sheet_name="Subregions")
+            mapping = {}
+            for _, row in df.iterrows():
+                region = row.get('Region')
+                subregion = row.get('Subregion')
+                if pd.notna(region) and pd.notna(subregion):
+                    if region not in mapping:
+                        mapping[region] = []
+                    if subregion not in mapping[region]:
+                        mapping[region].append(subregion)
+            return mapping
+        except Exception as e:
+            print(f"Warning: Could not read subregion mapping: {e}")
+            return {}

@@ -14,8 +14,9 @@ class DataManager:
         self.efficiency_data = []  # List of Variable objects for FE [var_ef, var_share]
         self.load_profiles = {} # List of Load_profile objects for the regions
         self.timeseries_total_results = {}
-        self.subregion_mapping = {}  # Maps region_name -> list of subregion codes
-        self.subregion_factors = {}  # Maps (Region, Sector, Subsector, Technology, Variable) -> {subregion_code: factor}
+        # Reuse subregion mapping from control_parameters
+        self.subregion_mapping = input_manager.general_settings.subregion_mapping
+        self.subregion_factors = {}  # Maps (Region, Variable) -> {subregion_code: factor}
 
     def read_and_filter_load_profiles(self, timsereis_file_df):
         active_regions = self.input_manager.general_settings.active_regions
@@ -218,19 +219,25 @@ class DataManager:
         self.efficiency_data = [var_ef, var_share]
 
     def read_subregion_factors(self, subregion_data):
-        """Read and store subregion factors from Hist_Subregion sheet."""
+        """Read and store subregion factors from Hist_Subregion sheet.
+        Stores factors keyed by (Region, Sector, Subsector, Variable) for proper lookup."""
         for _, row in subregion_data.iterrows():
             region = row.get('Region')
-            sector = row.get('Sector')
-            subsector = row.get('Subsector')
-            technology = row.get('Technology')
+            sector = row.get('Sector', 'default')
+            subsector = row.get('Subsector', 'default')
             variable = row.get('Variable')
             subregion = row.get('Subregion')
             
-            if pd.isna(region) or pd.isna(subregion):
+            if pd.isna(region) or pd.isna(subregion) or pd.isna(variable):
                 continue
             
-            # Get latest non-null year value
+            # Normalize sector/subsector to 'default' if NaN
+            if pd.isna(sector):
+                sector = 'default'
+            if pd.isna(subsector):
+                subsector = 'default'
+            
+            # Get latest non-null year value (0 is valid - means no production in that subregion)
             year_columns = [col for col in subregion_data.columns 
                           if isinstance(col, (int, float)) and not pd.isna(col)]
             year_columns_sorted = sorted([col for col in year_columns if isinstance(col, int)], reverse=True)
@@ -238,67 +245,52 @@ class DataManager:
             factor_value = None
             for year in year_columns_sorted:
                 val = row.get(year)
-                # Only accept non-null, non-zero values
-                if pd.notna(val) and val != 0:
+                if pd.notna(val):  # Accept 0 as valid value
                     factor_value = val
                     break
             
             if factor_value is None:
                 continue
             
-            key = (region, sector, subsector, technology, variable)
+            key = (region, sector, subsector, variable)
             if key not in self.subregion_factors:
                 self.subregion_factors[key] = {}
             self.subregion_factors[key][subregion] = factor_value
 
-    def read_subregion_mapping(self, mapping_data):
-        """Read subregion mapping from Subregions sheet."""
-        for _, row in mapping_data.iterrows():
-            region = row.get('Region')
-            subregion = row.get('Subregion')
-            if pd.notna(region) and pd.notna(subregion):
-                if region not in self.subregion_mapping:
-                    self.subregion_mapping[region] = []
-                if subregion not in self.subregion_mapping[region]:
-                    self.subregion_mapping[region].append(subregion)
+    # Mapping from control file variable names to data file variable names
+    DIST_VARIABLE_MAPPING = {
+        'DISTR_PROD_QUANT': 'DIST_PROD',
+        'DISTR_EMPLOYEE': 'DIST_EMPLOYEE',
+        'POP': 'POP',
+    }
 
-    def get_subregion_factors(self, region_name, match_keys):
+    def get_subregion_factors(self, region_name, sector_name, subsector_name):
         """
-        Get normalized subregion factors for a given region and match keys.
-        Factors are normalized to sum to 1. 
-        Fallback hierarchy:
-        1. Try exact match: (Region, Sector, Subsector, Technology, Variable)
-        2. Replace specific values with 'default' progressively, starting with Technology
-        3. Try alternative distribution variables (DIST_PROD, DIST_EMPLOYEE, POP)
-        4. Finally use uniform distribution if no default exists
+        Get normalized subregion factors for a given region and subsector.
+        Uses the distribution variable specified in the subsector settings (Subregional_division column).
+        Falls back to 'POP' if no specific variable is configured or found.
         """
-        sector, subsector, technology, variable = match_keys
+        # Get the distribution variable from subsector settings
+        subsector_division = self.input_manager.general_settings.subsector_subregion_division
+        dist_variable_setting = subsector_division.get((sector_name, subsector_name), 'POP')
         
-        # Distribution variables to try as fallback
-        dist_variables = ['DIST_PROD', 'DIST_EMPLOYEE', 'POP']
+        # Map from control file naming to data file naming
+        dist_variable = self.DIST_VARIABLE_MAPPING.get(dist_variable_setting, dist_variable_setting)
         
-        # Build fallback chain by progressively replacing with 'default'
+        # Build fallback chain: specific subsector -> sector default -> global default
         fallback_keys = [
-            (region_name, sector, subsector, technology, variable),
-            (region_name, sector, subsector, 'default', variable),
-            (region_name, sector, 'default', 'default', variable),
-            (region_name, 'default', 'default', 'default', variable),
+            (region_name, sector_name, subsector_name, dist_variable),
+            (region_name, sector_name, 'default', dist_variable),
+            (region_name, 'default', 'default', dist_variable),
         ]
         
-        # Add distribution variable fallbacks
-        for dist_var in dist_variables:
+        # If not POP, also try POP as fallback
+        if dist_variable != 'POP':
             fallback_keys.extend([
-                (region_name, sector, subsector, 'default', dist_var),
-                (region_name, sector, 'default', 'default', dist_var),
-                (region_name, 'default', 'default', 'default', dist_var),
+                (region_name, sector_name, subsector_name, 'POP'),
+                (region_name, sector_name, 'default', 'POP'),
+                (region_name, 'default', 'default', 'POP'),
             ])
-        
-        # Add remaining generic defaults
-        fallback_keys.extend([
-            (region_name, sector, subsector, 'default', 'default'),
-            (region_name, sector, 'default', 'default', 'default'),
-            (region_name, 'default', 'default', 'default', 'default'),
-        ])
         
         factors = {}
         for key in fallback_keys:
@@ -321,7 +313,7 @@ class DataManager:
         
         return factors
 
-    def expand_forecast_to_subregions(self, forecast_df, region_name, sector_name=None, subsector_name=None, variable_name=None):
+    def expand_forecast_to_subregions(self, forecast_df, region_name, sector_name=None, subsector_name=None):
         """
         Expand forecast data to subregions using normalized factors.
         
@@ -330,7 +322,6 @@ class DataManager:
             region_name: Name of the region to disaggregate
             sector_name: Sector name (for factor lookup)
             subsector_name: Subsector name (for factor lookup)
-            variable_name: Variable name (for factor lookup)
         
         Returns:
             DataFrame with subregional breakdown or original if no factors available
@@ -341,15 +332,11 @@ class DataManager:
         subregion_rows = []
         
         for _, row in forecast_df.iterrows():
-            # Determine which keys to use for factor lookup
             sector = sector_name or row.get('Sector', 'default')
             subsector = subsector_name or row.get('Subsector', 'default')
-            technology = row.get('Technology', 'default')
-            variable = variable_name or row.get('Variable', 'default')
             
-            # Get subregion factors
-            match_keys = (sector, subsector, technology, variable)
-            factors = self.get_subregion_factors(region_name, match_keys)
+            # Get subregion factors using the distribution variable from settings
+            factors = self.get_subregion_factors(region_name, sector, subsector)
             
             # If no factors found, keep original row
             if not factors:
@@ -361,9 +348,7 @@ class DataManager:
             
             for subregion, factor in factors.items():
                 sub_row = row.copy()
-                # Keep region name in Region column, put subregion code in Subregions column
                 sub_row['Subregions'] = subregion
-                # Scale year values by factor
                 for year_col in year_columns:
                     if year_col in sub_row.index and pd.notna(sub_row[year_col]):
                         sub_row[year_col] = sub_row[year_col] * factor
@@ -413,12 +398,9 @@ class Region:
         for _, fe_row in self.energy_fe.iterrows():
             sector = fe_row.get('Sector')
             subsector = fe_row.get('Subsector')
-            technology = fe_row.get('Technology')
-            variable = 'Final Energy'
             
-            # Get subregion factors for this row
-            match_keys = (sector, subsector, technology, variable)
-            factors = data_manager.get_subregion_factors(self.region_name, match_keys)
+            # Get subregion factors using distribution variable from settings
+            factors = data_manager.get_subregion_factors(self.region_name, sector, subsector)
             
             # If no factors, keep original region data
             if not factors:
@@ -428,9 +410,7 @@ class Region:
             # Create one row per subregion with scaled values
             for subregion, factor in factors.items():
                 sub_row = fe_row.copy()
-                # Keep region name in Region column, put subregion code in Subregions column
                 sub_row['Subregions'] = subregion
-                # Scale year values by factor
                 for year_col in year_columns:
                     if year_col in sub_row.index and pd.notna(sub_row[year_col]):
                         sub_row[year_col] = sub_row[year_col] * factor
