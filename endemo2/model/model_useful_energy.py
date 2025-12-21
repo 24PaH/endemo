@@ -1,6 +1,7 @@
 import pandas as pd
 import itertools
 from endemo2.model.model_final_energy import get_matches
+from endemo2.model.model_subregional import expand_ue_to_subregions
 
 def calculate_useful_energy(data):
     """
@@ -38,6 +39,8 @@ def calculate_useful_energy(data):
             ue_region.append(ue_sector)
         ue_per_region = pd.concat(ue_region, ignore_index=True)
         region.energy_ue = ue_per_region
+        # Expand to subregions if subregion factors are available
+        expand_ue_to_subregions(region, data, forecast_year_range)
 
 
 def calculate_ue(ecu, ddets, forecast_year_range,

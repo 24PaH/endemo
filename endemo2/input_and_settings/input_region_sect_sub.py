@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 from typing import Union
 from endemo2.model.model_final_energy import calc_fe_types
+from endemo2.model.model_subregional import expand_forecast_to_subregions, expand_fe_to_subregions
 
 
 
@@ -198,7 +199,7 @@ class DataManager:
             for region in self.regions:
                 region.calc_fe_region(eff_forecast,share_forecast,forecast_year_range)
                 # Expand to subregions if subregion factors are available
-                region.expand_fe_to_subregions(self, forecast_year_range)
+                expand_fe_to_subregions(region, self, forecast_year_range)
 
     def calc_timeseries(self):
         if self.input_manager.general_settings.timeseries_forecast == 0:
@@ -313,51 +314,7 @@ class DataManager:
         
         return factors
 
-    def expand_forecast_to_subregions(self, forecast_df, region_name, sector_name=None, subsector_name=None):
-        """
-        Expand forecast data to subregions using normalized factors.
-        
-        Args:
-            forecast_df: DataFrame with forecast data
-            region_name: Name of the region to disaggregate
-            sector_name: Sector name (for factor lookup)
-            subsector_name: Subsector name (for factor lookup)
-        
-        Returns:
-            DataFrame with subregional breakdown or original if no factors available
-        """
-        if forecast_df is None or forecast_df.empty:
-            return forecast_df
-        
-        subregion_rows = []
-        
-        for _, row in forecast_df.iterrows():
-            sector = sector_name or row.get('Sector', 'default')
-            subsector = subsector_name or row.get('Subsector', 'default')
-            
-            # Get subregion factors using the distribution variable from settings
-            factors = self.get_subregion_factors(region_name, sector, subsector)
-            
-            # If no factors found, keep original row
-            if not factors:
-                subregion_rows.append(row.copy())
-                continue
-            
-            # Create one row per subregion with scaled values
-            year_columns = [col for col in forecast_df.columns if isinstance(col, str) and col.isdigit()]
-            
-            for subregion, factor in factors.items():
-                sub_row = row.copy()
-                sub_row['Subregions'] = subregion
-                for year_col in year_columns:
-                    if year_col in sub_row.index and pd.notna(sub_row[year_col]):
-                        sub_row[year_col] = sub_row[year_col] * factor
-                subregion_rows.append(sub_row)
-        
-        if subregion_rows:
-            return pd.DataFrame(subregion_rows).reset_index(drop=True)
-        else:
-            return forecast_df
+
 
 class Region:
     def __init__(self, region_name, country_code):
@@ -369,6 +326,7 @@ class Region:
         self.code = country_code
         self.sectors = []
         self.energy_ue = None
+        self.energy_ue_subregions = None  # Useful energy expanded to subregions
         self.energy_fe = None
         self.energy_fe_subregions = None  # Final energy expanded to subregions
         # self.DDr_data = DataFrame #TODO
@@ -383,41 +341,7 @@ class Region:
             fe_energy.append(sector.energy_fe)
         self.energy_fe = pd.concat(fe_energy, axis=0, ignore_index=True)
 
-    def expand_fe_to_subregions(self, data_manager, forecast_year_range):
-        """
-        Expand FE to subregions by multiplying by normalized subregion factors.
-        Creates one row per subregion with the Subregions column set to subregion code
-        and values scaled by the subregion factor. Region column keeps the region name.
-        """
-        if self.energy_fe is None or self.energy_fe.empty:
-            return
-        
-        subregion_rows = []
-        year_columns = [str(year) for year in forecast_year_range]
-        
-        for _, fe_row in self.energy_fe.iterrows():
-            sector = fe_row.get('Sector')
-            subsector = fe_row.get('Subsector')
-            
-            # Get subregion factors using distribution variable from settings
-            factors = data_manager.get_subregion_factors(self.region_name, sector, subsector)
-            
-            # If no factors, keep original region data
-            if not factors:
-                subregion_rows.append(fe_row.copy())
-                continue
-            
-            # Create one row per subregion with scaled values
-            for subregion, factor in factors.items():
-                sub_row = fe_row.copy()
-                sub_row['Subregions'] = subregion
-                for year_col in year_columns:
-                    if year_col in sub_row.index and pd.notna(sub_row[year_col]):
-                        sub_row[year_col] = sub_row[year_col] * factor
-                subregion_rows.append(sub_row)
-        
-        if subregion_rows:
-            self.energy_fe_subregions = pd.DataFrame(subregion_rows).reset_index(drop=True)
+
 
 
     def calc_timeseries_reg(self,forecast_year_range):

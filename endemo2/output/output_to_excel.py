@@ -5,6 +5,7 @@ from datetime import datetime
 from collections import defaultdict
 import os
 import time
+from endemo2.model.model_subregional import expand_forecast_to_subregions
 # import graphical output lazily to avoid heavy dependencies during exports
 try:
     from endemo2.output.grapthical_output import GraphDataPreparer, Visualizer
@@ -61,7 +62,11 @@ class ExcelWriter:
         for region in regions:
             if region.energy_ue is not None and not region.energy_ue.empty:
                 self._process_region_ue(region)
-                # Also create subregional UE data
+            
+            # Collect subregional UE data if available
+            if (hasattr(region, 'energy_ue_subregions') and 
+                region.energy_ue_subregions is not None and 
+                not region.energy_ue_subregions.empty):
                 self._process_region_ue_subregional(region)
 
     def collect_fe_data(self, regions):
@@ -106,43 +111,29 @@ class ExcelWriter:
             self.ue_sector_data[sector_name].append(sector_df)
 
     def _process_region_ue_subregional(self, region):
-        """Process subregional UE data by expanding using subregion factors"""
-        df = region.energy_ue.copy()
-        subregion_rows = []
-        year_columns = [col for col in df.columns if isinstance(col, str) and col.isdigit()]
+        """Process subregional UE data from pre-calculated energy_ue_subregions"""
+        df_sub = region.energy_ue_subregions.copy()
         
-        for _, row in df.iterrows():
-            sector = row.get('Sector', 'default')
-            subsector = row.get('Subsector', 'default')
-            
-            factors = self.data.get_subregion_factors(region.region_name, sector, subsector)
-            if not factors:
-                sub_row = row.copy()
-                sub_row['Subregions'] = region.region_name
-                subregion_rows.append(sub_row)
-                continue
-            
-            for subregion, factor in factors.items():
-                sub_row = row.copy()
-                sub_row['Subregions'] = subregion
-                for year_col in year_columns:
-                    if year_col in sub_row.index and pd.notna(sub_row[year_col]):
-                        sub_row[year_col] = sub_row[year_col] * factor
-                subregion_rows.append(sub_row)
+        # Ensure the subregion column is named 'Subregions' and placed after 'Region'
+        if 'Subregions' not in df_sub.columns:
+            alt = next((c for c in df_sub.columns if c.lower() in ('subregions', 'subregion')), None)
+            if alt:
+                df_sub = df_sub.rename(columns={alt: 'Subregions'})
+            else:
+                df_sub['Subregions'] = df_sub['Region']
         
-        if subregion_rows:
-            df_sub = pd.DataFrame(subregion_rows).reset_index(drop=True)
-            # Reorder columns
-            cols = list(df_sub.columns)
-            if 'Region' in cols:
-                cols.remove('Region')
-                cols.insert(0, 'Region')
-            if 'Subregions' in cols:
-                cols.remove('Subregions')
-                cols.insert(1, 'Subregions')
-            df_sub = df_sub[cols]
-            for sector_name, sector_df in df_sub.groupby('Sector'):
-                self.ue_sector_data_subregional[sector_name].append(sector_df)
+        # Reorder columns
+        cols = list(df_sub.columns)
+        if 'Region' in cols:
+            cols.remove('Region')
+            cols.insert(0, 'Region')
+        if 'Subregions' in cols:
+            cols.remove('Subregions')
+            cols.insert(1, 'Subregions')
+        df_sub = df_sub[cols]
+        
+        for sector_name, sector_df in df_sub.groupby('Sector'):
+            self.ue_sector_data_subregional[sector_name].append(sector_df)
 
     def _process_region_fe(self, region):
         """Process region-level FE data (no subregional breakdown)"""
@@ -219,7 +210,8 @@ class ExcelWriter:
             return
         
         # Disaggregate extensive variables to subregions
-        df_sub = self.data.expand_forecast_to_subregions(
+        df_sub = expand_forecast_to_subregions(
+            self.data,
             df, 
             region.region_name,
             sector.name,
