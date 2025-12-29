@@ -417,7 +417,7 @@ class ExcelWriter:
                 with pd.ExcelWriter(file_path) as writer:
                     combined.to_excel(writer, sheet_name="UE_all", index=False)
                     combined.groupby(['UE_Type', "Temp_level", "Region", "Subregions"]).sum(numeric_only=True).to_excel(
-                        writer, sheet_name="Aggregated_by_Subregion")
+                        writer, sheet_name="Aggregated_by_Sector_per_Subregion")
 
     def _write_fe_sector_data(self):
         """Handle sector-level FE data writing - both regional and subregional"""
@@ -458,7 +458,7 @@ class ExcelWriter:
                 with pd.ExcelWriter(file_path) as writer:
                     combined.to_excel(writer, sheet_name="FE_all", index=False)
                     combined.groupby(["FE_Type", 'UE_Type', "Temp_level", "Region", "Subregions"]).sum(
-                        numeric_only=True).to_excel(writer, sheet_name="Aggregated_by_Subregion")
+                        numeric_only=True).to_excel(writer, sheet_name="Aggregated_by_Sector_per_Subregion")
 
     def _write_diagrams(self):
         """Generate and save Sankey diagrams"""

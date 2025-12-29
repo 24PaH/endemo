@@ -258,13 +258,6 @@ class DataManager:
                 self.subregion_factors[key] = {}
             self.subregion_factors[key][subregion] = factor_value
 
-    # Mapping from control file variable names to data file variable names
-    DIST_VARIABLE_MAPPING = {
-        'DISTR_PROD_QUANT': 'DIST_PROD',
-        'DISTR_EMPLOYEE': 'DIST_EMPLOYEE',
-        'POP': 'POP',
-    }
-
     def get_subregion_factors(self, region_name, sector_name, subsector_name):
         """
         Get normalized subregion factors for a given region and subsector.
@@ -273,10 +266,7 @@ class DataManager:
         """
         # Get the distribution variable from subsector settings
         subsector_division = self.input_manager.general_settings.subsector_subregion_division
-        dist_variable_setting = subsector_division.get((sector_name, subsector_name), 'POP')
-        
-        # Map from control file naming to data file naming
-        dist_variable = self.DIST_VARIABLE_MAPPING.get(dist_variable_setting, dist_variable_setting)
+        dist_variable = subsector_division.get((sector_name, subsector_name), 'POP')
         
         # Build fallback chain: specific subsector -> sector default -> global default
         fallback_keys = [
